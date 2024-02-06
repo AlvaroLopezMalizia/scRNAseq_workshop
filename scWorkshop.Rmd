@@ -1,0 +1,574 @@
+---
+title: 'Single cell RNA sequencing analysis'
+subtitle: 'Bioinformatic analysis of single cell RNA sequencing data applied to immunology <br/> Universidad San Sebastián, Santiago, Chile'
+author: 
+- name: Joshua Waterfall
+  affiliation: Inserm U830 and Translational Research Dept, Institut Curie
+date: "2022-11"
+output:
+  html_document:
+    keep_md: yes
+    number_sections: yes
+    smart: no
+    toc: yes
+    toc_float: yes
+  pdf_document:
+    toc: yes
+editor_options:
+  chunk_output_type: console
+---
+
+
+
+```{js, echo=FALSE}
+$(document).ready(function() {
+
+  $chunks = $('.fold');
+
+  $chunks.each(function () {
+
+    // add button to source code chunks
+    if ( $(this).hasClass('s') ) {
+      $('pre.r', this).prepend("<div class=\"showopt\">Show Source</div><br style=\"line-height:22px;\"/>");
+      $('pre.r', this).children('code').attr('class', 'folded');
+    }
+
+    // add button to output chunks
+    if ( $(this).hasClass('o') ) {
+      $('pre:not(.r)', this).has('code').prepend("<div class=\"showopt\">Show Output</div><br style=\"line-height:22px;\"/>");
+      $('pre:not(.r)', this).children('code:not(r)').addClass('folded');
+
+      // add button to plots
+      $(this).find('img').wrap('<pre class=\"plot\"></pre>');
+      $('pre.plot', this).prepend("<div class=\"showopt\">Show Plot</div><br style=\"line-height:22px;\"/>");
+      $('pre.plot', this).children('img').addClass('folded');
+
+    }
+  });
+
+  // hide all chunks when document is loaded
+  $('.folded').css('display', 'none')
+
+  // function to toggle the visibility
+  $('.showopt').click(function() {
+    var label = $(this).html();
+    if (label.indexOf("Show") >= 0) {
+      $(this).html(label.replace("Show", "Hide"));
+    } else {
+      $(this).html(label.replace("Hide", "Show"));
+    }
+    $(this).siblings('code, img').slideToggle('fast', 'swing');
+  });
+});
+```
+
+```{css, echo=FALSE}
+.showopt {
+  background-color: #004c93;
+  color: #FFFFFF; 
+  width: 100px;
+  height: 20px;
+  text-align: center;
+  vertical-align: middle !important;
+  float: right;
+  font-family: sans-serif;
+  border-radius: 8px;
+}
+
+.showopt:hover {
+    background-color: #dfe4f2;
+    color: #004c93;
+}
+
+pre.plot {
+  background-color: white !important;
+}
+```
+
+```{r setup, cache = F, echo=FALSE, include=FALSE}
+knitr::opts_chunk$set(error = TRUE)
+Sys.setenv("LANGUAGE"="EN")
+require(tidyverse)
+```
+
+# <span style="color:#FFA07A">__Introduction__</span>
+## scRNASeq analysis
+
+This is an introduction to analyzing single cell RNA-seq data (scRNAseq), emphasis on *introduction*.  It is primarily a confidence building excercise to gain experience with fundamental steps such as QC, normalization, dimensionality reduction, visualization, and sample merging.  We will primarily use the [Seurat package](https://satijalab.org/seurat/) from Rahul Satija's group as well as many general methods from the [tidyverse](https://www.tidyverse.org/) and the [clustree package](https://github.com/lazappi/clustree) from Luke Zappia.  There are many other excellent tools, both in R and python, but these cover the needs of our workshop, are widely used, and nicely maintained.
+
+scRNAseq differs from bulk RNAseq in at least three important ways.  First, **scRNAseq is sparse** (has many more zeroes). This arises from both biological (eg bursty gene expression) and technological (eg PCR drop-out) effects. Whatever the source, it changes the statistical models that are employed.  It also means that while we can confidently quantify a single gene in many cells, or a set of genes in one cell, we can't draw particularly strong conclusions about a single gene in a single cell.    The second difference is that **unsupervised analysis is central** since the individual cells don't come with any labels or annotations.  Of course unsupervised analysis of bulk RNAseq is also important, but it is *essential* in scRNAseq from the very beginning.  Finally, since the number of cells in a typical scRNAseq dataset (routinely many 10s of thousands) vastly outnumbers the number of samples in a typical bulk RNAseq experiment (often not exceeding hundreds), **nonlinear dimensionality reduction** is more important.
+
+For this workshop we will analyze 10X scRNAseq data from human PBMCs.  It was published by [Kang, HM, et al, 2018 Nat Biotechnol.](https://www.ncbi.nlm.nih.gov/pubmed/29227470) and is available in the NCBI GEO database under [accession id GSE96583](https://www.ncbi.nlm.nih.gov/geo/query/acc.cgi?acc=GSE96583).
+
+To begin with, make a new folder called "KangHM_2018_data" and within it a subfolder called "GSM2560245". Download these files to the GSM2560245 folder:
+
+* The gene annotations: [GSE96583_batch1.genes.tsv.gz](https://www.ncbi.nlm.nih.gov/geo/download/?acc=GSE96583&format=file&file=GSE96583%5Fbatch1%2Egenes%2Etsv%2Egz),
+* The table of cells by genes: [GSM2560245_A.mat.gz](https://www.ncbi.nlm.nih.gov/geo/download/?acc=GSM2560245&format=file&file=GSM2560245%5FA%2Emat%2Egz),
+* The cell barcodes: [GSM2560245_barcodes.tsv.gz](https://www.ncbi.nlm.nih.gov/geo/download/?acc=GSM2560245&format=file&file=GSM2560245%5Fbarcodes%2Etsv%2Egz)
+
+
+These correspond to the output of the 10X Genomics software CellRanger but we must re-name the files before loading them.  Change GSE96583_batch1.genes.tsv.gz to features.tsv.gz, GSM2560245_A.mat.gz to matrix.mtx.gz, and GSM2560245_barcodes.tsv.gz to barcodes.tsv.gz 
+
+ 
+# <span style="color:#FFA07A">__Preprocessing__</span>
+
+##Load Packages
+```{r package, cache = F, eval=TRUE, echo=TRUE, message=FALSE,warning = FALSE}
+start <- Sys.time()
+# bundle of package for data science.  
+# If you don't have it installed, use install.packages("tidyverse") 
+library(tidyverse)
+# ggplot addon for publication quality plots.  
+# If you don't have it installed, use install.packages("cowplot") 
+library(cowplot) 
+# multi-purpose tool for many single cell analysis steps. 
+# If you don't have it installed, follow instructions at 
+# https://satijalab.org/seurat/install.html
+library(Seurat) 
+# visualization for cluster membership. 
+# If you don't have it installed, use install.packages("clustree")
+library(clustree)
+```
+
+## Creating Seurat Object
+
+A Seurat object is a data structure in R that is specifically designed for storing data from single cell experiments. It can notably store the expression matrix and various manipulations thereof (eg PCA, TSNE, UMAP) as well as metadata such as QC information and clustering results.
+We will initially read in the output of the CellRanger tool provided by 10X Genomics, which does base calling, de-multiplexing, alignment, and gene counts - producing a table of barcodes and counts per gene.
+
+```{r Seurat Object, cache = F, eval=T, echo=TRUE, message=FALSE, warning = FALSE}
+# Set random number generator seed for reproducibility
+set.seed(123)
+
+# load in the droplet counts
+# CellRanger generates a trio of files - 
+# matrix.mtx.gz, barcodes.tsv.gz and features.tsv.gz
+sampleA.data <- Read10X(data.dir = "KangHM_2018_data/GSM2560245/")
+
+# How big is this count table?
+sampleA.data %>% dim()
+
+#How sparse is this data?
+sampleA.data %>% head(50)
+
+# Create Seurat Object
+# Filtering out genes observed in fewer than 3 cells and cells with fewer than 200 genes.
+# Those filtering steps are not essential, feel free to use different cutoffs 
+# or ignore them entirely at this stage.
+
+sampleA <- CreateSeuratObject(counts = sampleA.data, project="sampleA", min.cells=3, 
+                              min.features=200)
+
+# What is the size of our Seurat object?
+# How many genes and cells were removed from original table?
+sampleA
+```
+
+# <span style="color:#FFA07A">__Quality Control__</span>
+
+Now that we have the data loaded, the next step is to perform some basic quality control steps.  In addition to the number of genes per cell and number of UMI per cell, we will also look at the percentage mitochondrial reads per cell. A common problem with making single cell suspensions (necessary for all droplet based technologies) is rupture of the outer membrance and loss of cytoplasmic mRNA to diffusion or degradation. Since mitochrondial mRNA are "doubly protected" by the mitochondrial membrane, they are less likely to be lost. Therefore, droplets/cells with high percentage mitochondrial RNA and low counts for nuclear encoded genes are likely to be very damaged.
+
+
+```{r QC, echo=TRUE, message=FALSE, warning=FALSE, cache=FALSE}
+# The percentage mitochondrial reads is not automatically calculated by Cell Ranger 
+# so first we have to do this.
+sampleA[["percent.mt"]] <- PercentageFeatureSet(sampleA, pattern="^MT-")
+
+# Now lets looks at some common QC metrics
+# Note that "Feature" means "gene" and "Count" means "UMI" in this context
+VlnPlot(sampleA, features = c("nFeature_RNA", "nCount_RNA", "percent.mt"), ncol=3)
+
+# One dimensional violin plots are often difficult to interpret the entire 
+# distribution so let's try some histograms.  
+# This is also a demonstration of how to make plots without using Seurat's 
+# visualization commands
+
+sampleA.qc <- FetchData(sampleA, vars=c("nFeature_RNA","nCount_RNA","percent.mt"))
+sampleA.qc %>% ggplot() + geom_histogram(aes(x=nCount_RNA),bins=100)
+# We see very clearly that the typical cell has about 1000 UMIs but this ranges 
+# from just a couple hundred to over 5000
+
+# Let's zoom in on the low count end of the spectrum just to see if we can 
+# identify any structure (eg bimodality)
+sampleA.qc %>% ggplot() + geom_histogram(aes(x=nCount_RNA),bins=100)+xlim(0,1500)
+# Given the large dynamic range, perhaps a log scale will be useful
+sampleA.qc %>% ggplot() + geom_histogram(aes(x=log10(nCount_RNA)),bins=100)
+
+# Now let's look at the number of genes per cell
+sampleA.qc %>% ggplot() + geom_histogram(aes(x=nFeature_RNA), bins=200)
+# Looks like the typical cell has data on about 300 genes, ranging from 200 
+# (the minimum we set when we created the Seurat object) to over 1600
+
+# And how about the percentage mitochondrial reads?
+sampleA.qc %>% ggplot() + geom_histogram(aes(x=percent.mt), bins=100)
+# The majority of cells are below 5% but some are over 15%
+
+# Sometimes it can be useful to look at the ranked values too.
+# Here note the log scale for the vertical axes and that CellRanger has already 
+# made an effort to remove empty droplets
+sampleA.qc %>% dplyr::mutate(rank_nCount_RNA = dense_rank(nCount_RNA)) %>% 
+  ggplot() + geom_point(aes(x=rank_nCount_RNA, y=nCount_RNA))+scale_y_log10()
+
+# It is often more useful to look at multiple QC metrics together instead of 
+# individually. Lets try some simple 2D scatter plots
+FeatureScatter(sampleA, feature1="nCount_RNA", feature2="percent.mt")
+FeatureScatter(sampleA, feature1="nCount_RNA", feature2="nFeature_RNA")
+
+# Again, we don't have to just use the Seurat plotting tools
+sampleA.qc %>% ggplot() + geom_point(aes(nCount_RNA, percent.mt))
+sampleA.qc %>% ggplot() + geom_point(aes(nCount_RNA, nFeature_RNA))
+
+# Most of this QC looks quite nice.  We don't see strikingly different  
+# subpopulations of cells by these QC metrics.
+# Just to be safe, let's remove cells with over 7% mitochrondrial reads, 
+# which may be a sign of ex-vivo damage during sample handling and 
+# library generation  
+sampleA <- subset(sampleA, subset = percent.mt < 7)
+
+
+```
+
+# <span style="color:#FFA07A">__Identify variable genes__</span>
+
+To get a feel for the patterns of gene expression change across cells, let's start exploring some visualizations
+
+```{r FindVariableGenes, echo=TRUE, message=FALSE, warning=FALSE, cache=FALSE}
+# The first step is to identify the most variable genes across the dataset.
+# Genes that don't vary across cells probably won't contribute much to downstream 
+# analyses, so we will focus on the top 2000 most variable genes here.
+# First we will apply a variance stablizing transformation (vst) to model the 
+# mean/variance relationship
+sampleA <- FindVariableFeatures(sampleA, selection.method = "vst", nfeatures = 2000)
+# Let's see the names of the most highly variable genes now
+top10 <- head(VariableFeatures(sampleA), 10)
+top10
+
+# Now let's plot the variance (after vst) versus the mean of expression for each gene, 
+# coloring the top 2000 and labelling the top 10
+plot1 <- VariableFeaturePlot(sampleA)
+LabelPoints(plot=plot1, points = top10, repel=T, xnudge=0, ynudge=0) + theme(legend.position="none")
+```
+
+# <span style="color:#FFA07A">__Scaling gene expression__</span>
+
+The next step is to scale the expression of each gene to have an average expression over cells of 0 and a variance of 1.  This type of linear transformation is commonly applied in many big data domains to allow feautures (eg genes) with different magnitudes (eg expression levels) to contribute equally to downstream analyses.  In Seurat, the results of this transformation don't overwrite the unscaled expression values, instead they are stored in sampleA[["RNA"]]@scale.data
+
+```{r Scale, echo=TRUE, message=FALSE, warning=FALSE, cache=FALSE}
+# scale the data
+all.genes <- rownames(sampleA)
+sampleA <- ScaleData(sampleA, features = all.genes)
+```
+
+# <span style="color:#FFA07A">__PCA__</span>
+
+We've identified highly variable genes and equalized the scale of different genes.  Now let's do our first dimensionality reduction and visualization, PCA.
+
+```{r PCA, echo=TRUE, message=FALSE, warning=FALSE, cache=FALSE}
+
+# perform PCA
+sampleA <- RunPCA(sampleA, features = VariableFeatures(sampleA))
+DimPlot(sampleA, reduction="pca")
+# Hmm, that doesn't show much structure.  It seems like the vast majority of the 
+# variation across cells is coming from one direction in gene expression space.
+# Maybe we can learn something by looking at what genes contribute to that PC.
+
+DimHeatmap(sampleA, dims = 1, cells = 500, balanced=T)
+# It appears that PC1 just has postive weights from a bunch of genes without any
+# negative ones.  This suggests it isn't balancing expression of different gene 
+# sets, it's just measuring overall signal.  What do other PCs look like?
+
+DimHeatmap(sampleA, dims = 1:5, cells = 500, balanced=T)
+# The other PCs instead do seem to be measuring the relative expression of 
+# different genes. If PC1 is just the total signal per cell maybe we can 
+# visualize that directly.
+FeaturePlot(sampleA, features=c("nCount_RNA"))
+# That definitely seems to be the case.  In fact, it is not surprising because we 
+# saw that there was a huge variation in the total RNA per cell in our QC and we 
+# never corrected for it.
+
+# To address this, we'll take a common and straightforward approach of dividing the 
+# counts for each gene by the total UMI for that cell and then take a log transformation.  
+# In truth, we will also multiply by a scaling factor of 10,000 before the log 
+# transformation. That is arbitrary and not particularly important but is common practice.
+
+sampleA <- NormalizeData(sampleA, normalization.method = "LogNormalize", 
+                         scale.factor=10000)
+
+# Now we have to re-identify highly variable features and re-scale 
+sampleA <- FindVariableFeatures(sampleA, selection.method = "vst", nfeatures = 2000)
+top10 <- head(VariableFeatures(sampleA), 10)
+top10
+plot1 <- VariableFeaturePlot(sampleA)
+LabelPoints(plot=plot1, points = top10, repel=T, xnudge = 0, ynudge = 0)+theme(legend.position="none")
+sampleA <- ScaleData(sampleA, features = all.genes)
+
+# perform PCA
+sampleA <- RunPCA(sampleA, features = VariableFeatures(sampleA))
+DimPlot(sampleA, reduction="pca")
+# That looks better.  The data is no longer so overwhelmingly dominated by just PC1 and 
+# we see some more structure now.
+# Let's check if the total UMI is still correlated with PC1 or PC2
+FeaturePlot(sampleA, features=c("nCount_RNA"))
+# Looks like there might still be some association of PC1 with total UMI, but 
+# not as drastic as before.
+
+DimHeatmap(sampleA, dims = 1, cells = 500, balanced=T)
+# PC1 is definitely balancing the relative expression of different genes now
+
+DimHeatmap(sampleA, dims = 1:5, cells = 500, balanced=T)
+```
+
+
+
+# <span style="color:#FFA07A">__UMAP__</span>
+
+PCA has both the bug and the feature that it is a linear transformation.  That's a *feature* in so far as it is easily interpretable/meaningful.  It's a *bug* however because it is limiting for visualization.  Uniform Manifold Approximation and Projection (UMAP) is a relatively recently developed nonlinear approach that has gained widespread use in the single cell community. Let's check it out.
+
+While we can calculate UMAP using the full original dimensional space, it can be useful to do some initial dimensionality reduction via PCA.  This will both speed up our calculations and, hopefully, remove noise from the distance metrics.
+
+```{r UMAP, echo=TRUE, message=FALSE, warning=FALSE, cache=FALSE}
+
+# To use PCA for dimensionality reduction we have to choose how many principal 
+# components to use.
+# Since PCA is linear and orthogonal, the PC values are straightforward to interpret 
+# as explaining a fraction of the total variation across the data.
+# Let's look at the top PCs.
+ElbowPlot(sampleA)
+
+# By default we see the top 20 but we can ask for more if we like.
+ElbowPlot(sampleA, ndims=50)
+# Note that the previous RunPCA only calculated the top 50.  If we want to look 
+# at more principal component values, we have to calculate them first.  We could go 
+# back and re-run the PCA but for the sake of time let's just use the top 50
+
+# While there's no clear cutoff (there rarely is), it doesn't look like all top 
+# 50 will be essential.  Our calculations will of course be quickest if we only 
+# use 2 PCs, let's see what effect that has.
+sampleA <- RunUMAP(sampleA, dims=1:2, verbose=F)
+DimPlot(sampleA, label=T) + NoLegend()
+# That seems suspicious.  It doesn't at all match our expectations about gene expression 
+# profiles of PBMC subsets should look like.  Let's see if it is a robust pattern, of if 
+# it changes a lot when we add just one more PC.
+
+sampleA <- RunUMAP(sampleA, dims=1:3, verbose=F)
+DimPlot(sampleA, label=T) + NoLegend()
+
+# Indeed, it changed quite a bit!  It still doesn't really match what we might expect 
+# for PBMCs.  Furthermore, the plot of PC values above doesn't plateau until somewhere 
+# in the 10-20 range.  Let's use the top 15.
+
+sampleA <- RunUMAP(sampleA, dims=1:15, verbose=F)
+DimPlot(sampleA, label=T) + NoLegend()
+# Some nice clusters!  First let's make sure none of them are driven by QC artifacts.
+
+FeaturePlot(sampleA, features=c("percent.mt"))
+FeaturePlot(sampleA, features=c("nCount_RNA"))
+# This looks good.  It does not seem like either percent mitochronrial reads or the 
+# total UMI per cell is dominating any of the structure we see in the UMAP.
+
+# While we're exploring, let's see about the top PCs.  While both UMAP and PCA are in 
+# some sense trying to find natural variations in the data, they are very different 
+# calculations in detail and we should not assume they are (or are not) related.
+FeaturePlot(sampleA, features=c("PC_1"))
+# PC1 does seem to be separating the cells on the far right from the others.
+FeaturePlot(sampleA, features=c("PC_2"))
+# PC2 seems to mostly be defining a gradient just across cells within the cloud 
+# in the top left
+
+# Now let's look at some individual genes.
+# For an unsupervised approach we could start with some of the most variable genes
+top10
+FeaturePlot(sampleA, features=top10[1:4], ncol=2)
+FeaturePlot(sampleA, features=top10[5:8], ncol=2)
+FeaturePlot(sampleA, features=top10[9:10], ncol=2)
+
+
+# We can also look at some of the genes from top PCs
+print(sampleA[["pca"]], dims=1:5, nfeatures=5)
+FeaturePlot(sampleA, features=c("CST3","FCN1","AIF1", "LYZ", "LST1"))
+FeaturePlot(sampleA, features=c("MALAT1","LTB", "RPS6", "CD69"))
+FeaturePlot(sampleA, features=c("LTB", "HLA-DRA"))
+
+# We can also look at genes that just interest us a priori and which we think might be 
+# high in particular PBMC subpopulations
+FeaturePlot(sampleA, features=c("MS4A1"))
+FeaturePlot(sampleA, features=c("CD3E"))
+FeaturePlot(sampleA, features=c("CD8A"))
+FeaturePlot(sampleA, features=c("CD4"))
+FeaturePlot(sampleA, features=c("CD14"))
+FeaturePlot(sampleA, features=c("FCGR3A"))
+
+```
+
+# <span style="color:#FFA07A">__Clustering__</span>
+
+Now let's do some formal clustering of this data. While many different clustering algorithms can be used, we will use the nearest-neighbor graph representation of this data and the Louvain algorithm to identify clusters/communities within the graph.  Since this framework only leverages distance metrics to the nearest neighbors it is relatively robust to the curse of dimensionality compared to other clustering algorithms.
+
+```{r clustering, echo=TRUE, message=FALSE, warning=FALSE, cache=FALSE}
+
+
+# We'll calculate distances in the first 10 dimensions.
+sampleA <- FindNeighbors(sampleA, dims=1:10)
+sampleA <- FindClusters(sampleA)
+
+# Now we will visualize cluster membership in the UMAP space.
+DimPlot(sampleA, reduction="umap")
+
+# Almost all clustering algorithms have some sort of free parameter that controls 
+# how many clusters are identified.
+# In the Louvain algorithm we have the *resolution* which, holding all other 
+# parameters (such as the dimensions, the number of nearest neighbors, etc) constant, 
+# controls the number of clusters.  Low (high) values for resultion give low (high) 
+# numbers of clusters.  Let's explore this. 
+sampleA <- FindClusters(sampleA, resolution=0.01)
+DimPlot(sampleA, reduction="umap")
+
+sampleA <- FindClusters(sampleA, resolution=10)
+DimPlot(sampleA)
+
+# It can be useful to see how clusters corresponding to one value of *resolution* 
+# correspond to those from another *resolution*.  The clustree package does a nice 
+# job of visualizing this over the clusterings we have already performed.
+head(sampleA[[]])
+clustree(sampleA,prefix="RNA_snn_res.")
+
+sampleA <- FindClusters(sampleA, resolution=seq(0.1, 2, by=0.1))
+clustree(sampleA,prefix="RNA_snn_res.")
+
+# Now let's go back to the resolution that gave us three clusters
+sampleA <- FindClusters(sampleA,resolution=0.01)
+DimPlot(sampleA)
+
+# Here is how we can identify marker genes for cluster 0
+cluster0.markers <- FindMarkers(sampleA, ident.1=0, min.pct=0.25)
+head(cluster0.markers)
+FeaturePlot(sampleA,features="CD74")
+
+# Since we didn't specify, the previous calculation gave us genes either 
+# significantly over or under expressed in our population of interest.  
+# Sometimes we just want over expressed genes, which is easy to filter for.
+cluster0.markers <- FindMarkers(sampleA, ident.1=0, min.pct=0.25,only.pos=T)
+head(cluster0.markers, 10)
+FeaturePlot(sampleA, features=c("IL32"))
+FeaturePlot(sampleA, features=c("CD3D"))
+
+# It's always good to try multiple different visualizations. 
+VlnPlot(sampleA, features=c("IL32", "CD3D", "B2M"))
+sampleA %>% FetchData(vars=c("IL32", "seurat_clusters")) %>% 
+  ggplot() + geom_histogram(aes(x=IL32),bins=100) + 
+  facet_grid(. ~ seurat_clusters)
+
+# Now let's find over-expressed marker genes for all clusters.
+sampleA.markers <- FindAllMarkers(sampleA, only.pos=T, min.pct=0.25, 
+                                  logfc.threshold = 0.25)
+topMarkers <- sampleA.markers %>% group_by(cluster) %>% 
+  top_n(n=20, wt=avg_log2FC)
+DoHeatmap(sampleA, features = topMarkers$gene) + NoLegend()
+
+# If we crank up the resolution a little we get some finer-grained separation 
+# of the UMAP clouds.
+sampleA <- FindClusters(sampleA, resolution=0.1)
+DimPlot(sampleA)
+# Let's see if cluster 1 and cluster 0 really have different gene expression 
+# patterns and, if so, whether those match any biology we already know and 
+# might expect to see in PBMCs.
+cluster1vs0 <- FindMarkers(sampleA, ident.1 = 1, ident.2 = 0)
+head(cluster1vs0,20)
+FeaturePlot(sampleA, features=c("NKG7"))
+FeaturePlot(sampleA, features=c("LTB"))
+# Note that LTB is also expressed in the group of cells at the bottom.  We had 
+# ignored them when looking for differentially expressed genes between clusters
+# 1 and 0 so this should not be surprising.
+sampleA.markers <- FindAllMarkers(sampleA, only.pos=T, min.pct=0.25)
+topMarkers <- sampleA.markers %>% group_by(cluster) %>% top_n(n=10,wt=avg_log2FC)
+DoHeatmap(sampleA, features = topMarkers$gene) + NoLegend()
+
+
+```
+
+# <span style="color:#FFA07A">__Sample Merging__</span>
+
+The final part of our workshop will be to explore merging different samples.  We will do this by loading another PBMC experiment from the same paper as before. Within your KangHM_2018_data folder create another subfolder called GSM2560246.  From GEO, download these files to the GSM2560246 folder:
+
+* The gene annotations (same as before): [GSE96583_batch1.genes.tsv.gz](https://www.ncbi.nlm.nih.gov/geo/download/?acc=GSE96583&format=file&file=GSE96583%5Fbatch1%2Egenes%2Etsv%2Egz),
+* The table of cells by genes: [GSM2560246_B.mat.gz](https://www.ncbi.nlm.nih.gov/geo/download/?acc=GSM2560246&format=file&file=GSM2560246%5FB%2Emat%2Egz),
+* The cell barcodes: [GSM2560246_barcodes.tsv.gz](https://www.ncbi.nlm.nih.gov/geo/download/?acc=GSM2560246&format=file&file=GSM2560246%5Fbarcodes%2Etsv%2Egz)
+
+
+As above, we need to change the file names to match the Cell Ranger output.  Change GSE96583_batch1.genes.tsv.gz to features.tsv.gz, GSM2560246_B.mat.gz to matrix.mtx.gz, and GSM2560246_barcodes.tsv.gz to barcodes.tsv.gz 
+
+```{r Integrating, echo=TRUE, message=FALSE, warning=FALSE, cache=FALSE}
+# Now lets load the second data set
+# We will do the same QC, normalization, scaling, etc as with sample A.
+sampleB.data <- Read10X(data.dir = "KangHM_2018_data/GSM2560246/")
+sampleB <-CreateSeuratObject(counts = sampleB.data, project="sampleB", 
+                             min.cells=3, min.features=200)
+
+sampleB[["percent.mt"]] <- PercentageFeatureSet(sampleB, pattern="^MT-")
+VlnPlot(sampleB, features = c("nFeature_RNA", "nCount_RNA", "percent.mt"), ncol=3)
+FeatureScatter(sampleB, feature1="nCount_RNA",feature2="percent.mt")
+FeatureScatter(sampleB, feature1="nCount_RNA", feature2="nFeature_RNA")
+
+# First we will merge the two samples together but not perform any 
+# computational integration (eg batch correction)
+samplesMrg <- merge(sampleA, sampleB, add.cell.ids=c("sampleA","sampleB"), 
+                    project="KangHM2018")
+samplesMrg
+table(samplesMrg$orig.ident)
+VlnPlot(samplesMrg, features=c("nFeature_RNA","nCount_RNA","percent.mt"), ncol=3, 
+        group.by = "orig.ident")
+
+samplesMrgNorm <- FindVariableFeatures(samplesMrg, selection.method = "vst", 
+                                       nfeatures = 2000)
+samplesMrgNorm <- ScaleData(samplesMrgNorm, features = all.genes)
+samplesMrgNorm <- NormalizeData(samplesMrgNorm, normalization.method = "LogNormalize", 
+                                scale.factor=10000)
+samplesMrgNorm <- RunPCA(samplesMrgNorm, verbose=F)
+DimPlot(samplesMrgNorm, reduction = "pca", group.by = "orig.ident")
+# We see that the two samples vary in similar directions in gene expression 
+# space but don't perfectly overlap.
+samplesMrgNorm <- RunUMAP(samplesMrgNorm, dims=1:20, verbose=F)
+DimPlot(samplesMrgNorm, reduction = "umap", group.by="orig.ident")
+FeaturePlot(samplesMrgNorm, features=c("CD3E", "MS4A1", "CD14"))
+# The same is apparent in the nonlinear UMAP.  We are definitely identifying 
+# similar populations in these PBMC samples but there are some systematic 
+# differences too.
+
+
+# As one particular approach for integration, we will use the Seurat v3 
+# approach of CCA+MNN
+
+sampsList <- SplitObject(samplesMrg, split.by = "orig.ident")
+sampsList <- lapply(X = sampsList, FUN = function(x) {
+  x <- NormalizeData(x)
+  x <- FindVariableFeatures(x, selection.method="vst", nfeatures=2000)
+})
+# As for any MNN approach we first have to identify "anchors" in the datasets
+samps.anchors <- FindIntegrationAnchors(object.list = sampsList, dims=1:20)
+#Next we adjust the gene expression profiles to maximize the overlap
+samps.combined <- IntegrateData(anchorset=samps.anchors, dims=1:20)
+DefaultAssay(samps.combined) <- "integrated"
+samps.combined <- ScaleData(samps.combined, verbose=F)
+samps.combined <- RunPCA(samps.combined, npcs=20, verbose=F)
+# Let's take a look at some visualizations to quickly gauge how well integrated 
+# the two samples are now.
+DimPlot(samps.combined, reduction="pca", group.by="orig.ident")
+samps.combined <- RunUMAP(samps.combined, dims=1:20, verbose=F)
+DimPlot(samps.combined, reduction="umap", group.by="orig.ident")
+FeaturePlot(samps.combined, features=c("CD3E", "MS4A1", "CD14"))
+# These two dimensional PCA and UMAP plots show minimal batch effects 
+# between the two samples now.
+
+
+end <- Sys.time()
+
+end - start
+```
+
+That's the end of our workshop.  I hope you found it valuable and feel more comfortable analyzing your own data now!
+
+<div class="fold o">
+```{r,echo=T}
+sessionInfo()
+```
+</div>
+

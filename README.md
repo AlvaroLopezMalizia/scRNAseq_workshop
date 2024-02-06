@@ -29,5 +29,7 @@ Accession ID: GSE96583 in NCBI GEO database
 To begin, create a new folder named "KangHM_2018_data" and a subfolder within it named "GSM2560245". Download the following files to the "GSM2560245" folder:
 
 Gene annotations: GSE96583_batch1.genes.tsv.gz
+
 Table of cells by genes: GSM2560245_A.mat.gz
+
 Cell barcodes: GSM2560245_barcodes.tsv.gz

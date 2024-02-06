@@ -1,13 +1,12 @@
-# scRNAseq_workshop
+# scRNAseq_workshop: Single Cell RNA Sequencing Analysis 🧬
 
-## Single Cell RNA Sequencing Analysis 🧬
 Bioinformatic analysis of single cell RNA sequencing data applied to immunology
 Universidad San Sebastián, Santiago, Chile
 
-Author:
-Name: Joshua Waterfall
-Affiliation: Inserm U830 and Translational Research Dept, Institut Curie
-Date: November 2022
+## Author
+- **Name:** Joshua Waterfall
+- **Affiliation:** Inserm U830 and Translational Research Dept, Institut Curie
+- **Date:** November 2022
 
 # Description added
 
@@ -21,15 +20,14 @@ scRNAseq data is sparse, with many more zeroes compared to bulk RNAseq data. Thi
 Given the absence of labels or annotations for individual cells, unsupervised analysis is central in scRNAseq from the beginning.
 ### 3- Nonlinear Dimensionality Reduction:
 With a vast number of cells in typical scRNAseq datasets, nonlinear dimensionality reduction techniques are crucial.
+
 ## Dataset Information:
-Dataset: 10X scRNAseq data from human PBMCs
-Publication: Kang, HM, et al, 2018 Nat Biotechnol.
-Accession ID: GSE96583 in NCBI GEO database
+- **Dataset:** 10X scRNAseq data from human PBMCs
+- **Publication:** Kang, HM, et al, 2018 Nat Biotechnol.
+- **Accession ID:** GSE96583 in NCBI GEO database
+
 ## Initial Setup:
 To begin, create a new folder named "KangHM_2018_data" and a subfolder within it named "GSM2560245". Download the following files to the "GSM2560245" folder:
-
-Gene annotations: GSE96583_batch1.genes.tsv.gz
-
-Table of cells by genes: GSM2560245_A.mat.gz
-
-Cell barcodes: GSM2560245_barcodes.tsv.gz
+- Gene annotations: GSE96583_batch1.genes.tsv.gz
+- Table of cells by genes: GSM2560245_A.mat.gz
+- Cell barcodes: GSM2560245_barcodes.tsv.gz
